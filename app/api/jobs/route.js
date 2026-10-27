@@ -4,6 +4,8 @@ import { MAX_CHARS } from '@/lib/limits';
 
 export const dynamic = 'force-dynamic';
 
+const env = (k) => (process.env[k] || '').trim();
+
 export async function POST(req) {
   let body;
   try {
@@ -14,7 +16,7 @@ export async function POST(req) {
 
   const { script = '', voice = 'tr-TR-EmelNeural', password = '' } = body;
 
-  if (!process.env.APP_PASSWORD || password !== process.env.APP_PASSWORD) {
+  if (!env('APP_PASSWORD') || password.trim() !== env('APP_PASSWORD')) {
     return NextResponse.json({ error: 'Şifre yanlış' }, { status: 401 });
   }
   const text = String(script).trim();
@@ -38,31 +40,28 @@ export async function POST(req) {
     return NextResponse.json({ error: 'Veritabanı hatası: ' + error.message }, { status: 500 });
   }
 
+  const repo = env('GITHUB_REPO');
+  const branch = env('GITHUB_BRANCH') || 'main';
   const res = await fetch(
-    `https://api.github.com/repos/${process.env.GITHUB_REPO}/actions/workflows/render.yml/dispatches`,
+    `https://api.github.com/repos/${repo}/actions/workflows/render.yml/dispatches`,
     {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${process.env.GITHUB_DISPATCH_TOKEN}`,
+        Authorization: `Bearer ${env('GITHUB_DISPATCH_TOKEN')}`,
         Accept: 'application/vnd.github+json',
         'X-GitHub-Api-Version': '2022-11-28',
         'Content-Type': 'application/json',
         'User-Agent': 'video-studio',
       },
-      body: JSON.stringify({
-        ref: process.env.GITHUB_BRANCH || 'main',
-        inputs: { job_id: job.id },
-      }),
+      body: JSON.stringify({ ref: branch, inputs: { job_id: job.id } }),
     }
   );
 
   if (!res.ok) {
     const msg = (await res.text()).slice(0, 300);
-    await supabase
-      .from('jobs')
-      .update({ status: 'error', error: `GitHub tetikleme hatası ${res.status}: ${msg}` })
-      .eq('id', job.id);
-    return NextResponse.json({ error: `GitHub tetikleme hatası ${res.status}` }, { status: 502 });
+    const detail = `GitHub hatası ${res.status} (repo: [${repo}], dal: [${branch}]): ${msg}`;
+    await supabase.from('jobs').update({ status: 'error', error: detail }).eq('id', job.id);
+    return NextResponse.json({ error: detail }, { status: 502 });
   }
 
   return NextResponse.json({ id: job.id });
