@@ -42,24 +42,38 @@ export async function POST(req) {
 
   const repo = env('GITHUB_REPO');
   const branch = env('GITHUB_BRANCH') || 'main';
+  const gh = {
+    Authorization: `Bearer ${env('GITHUB_DISPATCH_TOKEN')}`,
+    Accept: 'application/vnd.github+json',
+    'X-GitHub-Api-Version': '2022-11-28',
+    'User-Agent': 'video-studio',
+  };
+
   const res = await fetch(
     `https://api.github.com/repos/${repo}/actions/workflows/render.yml/dispatches`,
     {
       method: 'POST',
-      headers: {
-        Authorization: `Bearer ${env('GITHUB_DISPATCH_TOKEN')}`,
-        Accept: 'application/vnd.github+json',
-        'X-GitHub-Api-Version': '2022-11-28',
-        'Content-Type': 'application/json',
-        'User-Agent': 'video-studio',
-      },
+      headers: { ...gh, 'Content-Type': 'application/json' },
       body: JSON.stringify({ ref: branch, inputs: { job_id: job.id } }),
     }
   );
 
   if (!res.ok) {
-    const msg = (await res.text()).slice(0, 300);
-    const detail = `GitHub hatası ${res.status} (repo: [${repo}], dal: [${branch}]): ${msg}`;
+    const msg = (await res.text()).slice(0, 200);
+    let repoInfo = '?';
+    let flows = '?';
+    try {
+      const r1 = await fetch(`https://api.github.com/repos/${repo}`, { headers: gh });
+      repoInfo = r1.ok ? 'görünür' : `görünmüyor (${r1.status})`;
+      const r2 = await fetch(`https://api.github.com/repos/${repo}/actions/workflows`, { headers: gh });
+      if (r2.ok) {
+        const j = await r2.json();
+        flows = (j.workflows || []).map((w) => w.path).join(', ') || 'yok';
+      } else {
+        flows = `okunamadı (${r2.status})`;
+      }
+    } catch {}
+    const detail = `GitHub hatası ${res.status} | token ile repo: ${repoInfo} | iş akışları: ${flows} | ${msg}`;
     await supabase.from('jobs').update({ status: 'error', error: detail }).eq('id', job.id);
     return NextResponse.json({ error: detail }, { status: 502 });
   }
